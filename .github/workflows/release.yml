@@ -1,9 +1,12 @@
-name: Create Release Assets
+name: Create Release Draft and Assets
 
 on:
-  release:
-    types:
-      - created
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. "v1.10.0" without quotes)'
+        type: string
+        required: true
 
 env:
   FLUTTER_VERSION: "3.7.12"
@@ -13,7 +16,29 @@ jobs:
     runs-on: ubuntu-20.04
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake libgtk-3-dev ninja-build libayatana-appindicator3-dev
+
+      - name: Create Release Draft
+        id: create_release
+        uses: actions/github-script@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const response = await github.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: ${{ github.event.inputs.version }},
+              name: ${{ github.event.inputs.version }},
+              draft: true
+            });
+            return response.data.upload_url;
+
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -34,20 +59,28 @@ jobs:
       - name: Build deb package
         run: flutter_distributor package --platform linux --targets deb
 
-      - name: Get release info
-        id: get_info
+      - name: Find deb file
+        id: find_deb
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
-          VERSION=${VERSION#+*}
-          echo "::set-output name=upload_url::${{ github.event.release.upload_url }}"
-          echo "::set-output name=version::${VERSION}"
+          VERSION=${{ github.event.inputs.version }}
+          VERSION=${VERSION#v}
+          DEB_PATH=$(find dist -name "localsend_app-$VERSION*-linux.deb")
+          echo "::set-output name=deb_path::$DEB_PATH"
+
+      - name: Check if deb file exists
+        id: check_file
+        run: |
+          if [[ ! -f "${{ steps.find_deb.outputs.deb_path }}" ]]; then
+            echo "File not found: ${{ steps.find_deb.outputs.deb_path }}"
+            exit 1
+          fi
 
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ steps.get_info.outputs.upload_url }}
-          asset_path: ./dist/${{ steps.get_info.outputs.version }}/localsend_app-${{ steps.get_info.outputs.version }}-linux.deb
-          asset_name: LocalSend-${{ steps.get_info.outputs.version }}.deb
+          upload_url: ${{ steps.create_release.outputs.result }}
+          asset_path: ${{ steps.find_deb.outputs.deb_path }}
+          asset_name: LocalSend-${{ github.event.inputs.version }}.deb
           asset_content_type: application/vnd.debian.binary-package
