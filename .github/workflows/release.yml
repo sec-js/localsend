@@ -1,0 +1,53 @@
+name: Create Release Assets
+
+on:
+  release:
+    types:
+      - created
+
+env:
+  FLUTTER_VERSION: "3.7.12"
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: "stable"
+
+      - name: Dependencies
+        run: flutter pub get
+
+      - name: Build generated files
+        run: flutter pub run build_runner build -d
+
+      - name: Enable dart_distributor
+        run: dart pub global activate flutter_distributor
+
+      - name: Update PATH
+        run: echo 'export PATH="$PATH:$HOME/.pub-cache/bin"' >> ~/.bashrc
+
+      - name: Build deb package
+        run: flutter_distributor package --platform linux --targets deb
+
+      - name: Get release info
+        id: get_info
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION=${VERSION#+*}
+          echo "::set-output name=upload_url::${{ github.event.release.upload_url }}"
+          echo "::set-output name=version::${VERSION}"
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.get_info.outputs.upload_url }}
+          asset_path: ./dist/${{ steps.get_info.outputs.version }}/localsend_app-${{ steps.get_info.outputs.version }}-linux.deb
+          asset_name: LocalSend-${{ steps.get_info.outputs.version }}.deb
+          asset_content_type: application/vnd.debian.binary-package
